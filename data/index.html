@@ -15,69 +15,59 @@
 
     <button onclick="relay1On()">Relay 1 ON</button>
     <button onclick="relay1Off()">Relay 1 OFF</button>
-    <button onclick="relay2On()">Relay 2 ON</button>
-    <button onclick="relay2Off()">Relay 2 OFF</button>
 
     <script src="/chart.js"></script>
-    <script>
+    <script defer>
         var soilChart, tempChart, humidityChart;
 
         function initCharts() {
-            soilChart = new Chart(
-                document.getElementById("soilChart").getContext("2d"),
-                {
-                    type: "line",
-                    data: {
-                        labels: [],
-                        datasets: [
-                            { label: "Soil", data: [], borderColor: "brown", fill: false },
-                        ],
-                    },
+            soilChart = new Chart(document.getElementById("soilChart").getContext("2d"), {
+                type: "line",
+                data: {
+                    labels: [],
+                    datasets: [{ label: "Soil", data: [], borderColor: "brown", fill: false }]
                 }
-            );
-            tempChart = new Chart(
-                document.getElementById("tempChart").getContext("2d"),
-                {
-                    type: "line",
-                    data: {
-                        labels: [],
-                        datasets: [
-                            {
-                                label: "Temperature",
-                                data: [],
-                                borderColor: "red",
-                                fill: false,
-                            },
-                        ],
-                    },
+            });
+            tempChart = new Chart(document.getElementById("tempChart").getContext("2d"), {
+                type: "line",
+                data: {
+                    labels: [],
+                    datasets: [{ label: "Temperature", data: [], borderColor: "red", fill: false }]
                 }
-            );
-            humidityChart = new Chart(
-                document.getElementById("humidityChart").getContext("2d"),
-                {
-                    type: "line",
-                    data: {
-                        labels: [],
-                        datasets: [
-                            {
-                                label: "Humidity",
-                                data: [],
-                                borderColor: "blue",
-                                fill: false,
-                            },
-                        ],
-                    },
+            });
+            humidityChart = new Chart(document.getElementById("humidityChart").getContext("2d"), {
+                type: "line",
+                data: {
+                    labels: [],
+                    datasets: [{ label: "Humidity", data: [], borderColor: "blue", fill: false }]
                 }
-            );
+            });
+        }
+
+        function loadHistory() {
+            return fetch("/history")
+                .then(response => response.text())
+                .then(text => {
+                    const lines = text.trim().split('\n');
+                    lines.forEach(line => {
+                        try {
+                            const entry = JSON.parse(line);
+                            updateChart(soilChart, entry.timestamp, entry.soil);
+                            updateChart(tempChart, entry.timestamp, entry.temperature);
+                            updateChart(humidityChart, entry.timestamp, entry.humidity);
+                        } catch (e) {
+                            console.error("Error parsing JSON line:", line, e);
+                        }
+                    });
+                });
         }
 
         function updateData() {
             fetch("/data")
-                .then((response) => response.json())
-                .then((data) => {
+                .then(response => response.json())
+                .then(data => {
                     document.getElementById("soilValue").textContent = data.soil;
-                    document.getElementById("temperature").textContent =
-                        data.temperature;
+                    document.getElementById("temperature").textContent = data.temperature;
                     document.getElementById("humidity").textContent = data.humidity;
 
                     let now = new Date().toLocaleTimeString();
@@ -97,22 +87,14 @@
             chart.update();
         }
 
-        function relay1On() {
-            fetch("/relay1/on");
-        }
-        function relay1Off() {
-            fetch("/relay1/off");
-        }
-        function relay2On() {
-            fetch("/relay2/on");
-        }
-        function relay2Off() {
-            fetch("/relay2/off");
-        }
+        function relay1On() { fetch("/relay1/on"); }
+        function relay1Off() { fetch("/relay1/off"); }
 
         window.onload = function () {
             initCharts();
-            setInterval(updateData, 2000);
+            loadHistory().then(() => {
+                setInterval(updateData, 2000);
+            });
         };
     </script>
 </body>

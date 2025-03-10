@@ -2,48 +2,49 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include "DHT.h"
-#include <ArduinoJson.h>  // For JSON data
-#include <LittleFS.h>     // Include LittleFS
+#include <ArduinoJson.h>
+#include <LittleFS.h>
 #include <ESPmDNS.h>
 #include <DNSServer.h>
+#include <time.h>
 
 // WiFi
 const char *ssid = "SensorAP";
 const char *password = "";
 
-// Relay Pinsupload
-const int relay1Pin = 12;  // Soil moisture relay
-const int relay2Pin = 13;  // Temp/humidity relay
+// Pin config
+const int relay1Pin = 12;
 const int soilSensorPin = A0;
 const int DHTPIN = 27;
 const int DHTTYPE = DHT11;
 
+// Log file
+const char *logFileName = "/sensor_log.json";
+const int logMaxDays = 7;
+
 DHT dht(DHTPIN, DHTTYPE);
 AsyncWebServer server(80);
 DNSServer dnsServer;
+
+// Sensor variables
 int soilValue = 0;
 float temperature = 0;
 float humidity = 0;
 int moisture = 0;
 
-// soil sensor Threshold
+// Soil sensor Threshold
 const int SoilThreshold = 50;
-
-// Thresholds for t/h sensor
-const float highTempThreshold = 30.0;
-const float lowHumidityThreshold = 40.0;
+bool relayOverride = false;
 
 // JSON Document
 JsonDocument jsonDoc;
-
 
 void setup() {
   Serial.begin(115200);
 
   pinMode(relay1Pin, OUTPUT);
-  pinMode(relay2Pin, OUTPUT);
-  digitalWrite(relay1Pin, HIGH);  // Initialize relays to OFF
-  digitalWrite(relay2Pin, HIGH);
+  digitalWrite(relay1Pin, HIGH); // Initialize relay to OFF
+  // delay(2000);
 
   dht.begin();
 
@@ -56,7 +57,6 @@ void setup() {
       } else {
         Serial.println("LittleFS mount failed after format");
       }
-
     } else {
       Serial.println("LittleFS format failed");
     }
@@ -70,21 +70,23 @@ void setup() {
   Serial.print("AP IP address: ");
   Serial.println(IP);
 
-  dnsServer.start(53, "*", IP);
+  dnsServer.start(53, "*", WiFi.softAPIP());
+
   if (MDNS.begin("esp32")) {
     Serial.println("MDNS responder started");
   }
 
-  server.on("/chart.js", HTTP_GET, [](AsyncWebServerRequest *request) {
-        if (LittleFS.exists("/chart.js")) {
-            AsyncWebServerResponse *response = request->beginResponse(LittleFS, "/chart.js", "application/javascript");
-            request->send(response);
-        } else {
-            request->send(404, "text/plain", "File not found");
-        }
-    });
+  configTime(0, 0, "pool.ntp.org"); // NTP time
 
-  // Web server routes
+  server.on("/chart.js", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if (LittleFS.exists("/chart.js")) {
+      AsyncWebServerResponse *response = request->beginResponse(LittleFS, "/chart.js", "application/javascript");
+      request->send(response);
+    } else {
+      request->send(404, "text/plain", "File not found");
+    }
+  });
+
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (LittleFS.exists("/index.html")) {
       AsyncWebServerResponse *response = request->beginResponse(LittleFS, "/index.html", "text/html");
@@ -98,7 +100,7 @@ void setup() {
     soilValue = analogRead(soilSensorPin);
     temperature = dht.readTemperature();
     humidity = dht.readHumidity();
-    moisture = (soilValue/4095.00) * 100;
+    moisture = (soilValue / 4095.00) * 100;
 
     jsonDoc["soil"] = moisture;
     jsonDoc["temperature"] = temperature;
@@ -109,28 +111,49 @@ void setup() {
     request->send(200, "application/json", jsonString);
   });
 
+  server.on("/history", HTTP_GET, [](AsyncWebServerRequest *request) {
+    File file = LittleFS.open(logFileName, FILE_READ);
+    if (!file) {
+      request->send(404, "text/plain", "Log file not found");
+      return;
+    }
+    AsyncWebServerResponse *response = request->beginResponse(file, String(""), String("application/json"));
+    response->addHeader("Content-Encoding", "plain");
+    request->send(response);
+    file.close();
+  });
+
+  server.on("/viewlog", HTTP_GET, [](AsyncWebServerRequest *request) {
+    File file = LittleFS.open(logFileName, FILE_READ);
+    if (!file) {
+      request->send(404, "text/plain", "Log file not found");
+      return;
+    }
+    String fileContent = file.readString();
+    file.close();
+    request->send(200, "text/plain", fileContent);
+  });
+
   server.on("/relay1/on", HTTP_GET, [](AsyncWebServerRequest *request) {
     digitalWrite(relay1Pin, LOW);
+    relayOverride = true;
     request->send(200, "text/plain", "Relay 1 ON");
   });
 
   server.on("/relay1/off", HTTP_GET, [](AsyncWebServerRequest *request) {
     digitalWrite(relay1Pin, HIGH);
+    relayOverride = false;
     request->send(200, "text/plain", "Relay 1 OFF");
-  });
-
-  server.on("/relay2/on", HTTP_GET, [](AsyncWebServerRequest *request) {
-    digitalWrite(relay2Pin, LOW);
-    request->send(200, "text/plain", "Relay 2 ON");
-  });
-
-  server.on("/relay2/off", HTTP_GET, [](AsyncWebServerRequest *request) {
-    digitalWrite(relay2Pin, HIGH);
-    request->send(200, "text/plain", "Relay 2 OFF");
   });
 
   server.begin();
   WiFi.softAPConfig(IP, IP, IPAddress(255, 255, 255, 0));
+
+  Serial.print("LittleFS total bytes: ");
+  Serial.println(LittleFS.totalBytes());
+  Serial.print("LittleFS used bytes: ");
+  Serial.println(LittleFS.usedBytes());
+
 }
 
 void loop() {
@@ -138,22 +161,75 @@ void loop() {
   soilValue = analogRead(soilSensorPin);
   temperature = dht.readTemperature();
   humidity = dht.readHumidity();
-  moisture = (soilValue/4095.00) * 100;
-  // Serial.println(moisture);
+  moisture = (soilValue / 4095.00) * 100;
 
-  // // Soil Moisture Control
-  if (moisture > SoilThreshold) {
-    digitalWrite(relay1Pin, LOW);  // Turn on relay if soil is dry
+
+  logSensorData(moisture, temperature, humidity);
+
+  if (relayOverride) {
+    digitalWrite(relay1Pin, LOW);
   } else {
-    digitalWrite(relay1Pin, HIGH);  // Turn off relay if soil is wet
+    if (moisture > SoilThreshold) {
+      digitalWrite(relay1Pin, LOW);
+    } else {
+      digitalWrite(relay1Pin, HIGH);
+    }
   }
 
-  // // Temperature/Humidity Control
-  // if (temperature > highTempThreshold || humidity < lowHumidityThreshold) {
-  //   digitalWrite(relay2Pin, LOW);  // Turn on relay if temp high or humidity low
-  // } else {
-  //   digitalWrite(relay2Pin, HIGH);  // Turn off relay if temp/humidity normal
-  // }
-
   delay(2000);
+}
+
+void logSensorData(int soil, float temp, float hum) {
+  File file = LittleFS.open(logFileName, FILE_APPEND);
+  if (!file) return;
+
+  time_t now = time(nullptr);
+  if (now == 0) return;
+
+  char timestamp[20];
+  strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", localtime(&now));
+
+  DynamicJsonDocument logEntry(128);
+  logEntry["timestamp"] = timestamp;
+  logEntry["soil"] = soil;
+  logEntry["temperature"] = temp;
+  logEntry["humidity"] = hum;
+
+  serializeJson(logEntry, file);
+  file.println();
+  file.close();
+
+  cleanLogFile();
+}
+
+void cleanLogFile() {
+  File file = LittleFS.open(logFileName, FILE_READ);
+  if (!file) return;
+
+  DynamicJsonDocument doc(4096);
+  DeserializationError error = deserializeJson(doc, file);
+  file.close();
+
+  if (error) return;
+
+  JsonArray entries = doc.as<JsonArray>();
+  if (entries.size() > 0) {
+    time_t cutoffTime = time(nullptr) - (logMaxDays * 86400);
+
+    JsonArray filteredEntries;
+    for (JsonObject entry : entries) {
+      struct tm tm;
+      strptime(entry["timestamp"], "%Y-%m-%d %H:%M:%S", &tm);
+      time_t entryTime = mktime(&tm);
+      if (entryTime >= cutoffTime) {
+        filteredEntries.add(entry);
+      }
+    }
+
+    File newFile = LittleFS.open(logFileName, FILE_WRITE);
+    if (newFile) {
+      serializeJson(filteredEntries, newFile);
+      newFile.close();
+    }
+  }
 }
