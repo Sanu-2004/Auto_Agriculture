@@ -33,7 +33,7 @@ float humidity = 0;
 int moisture = 0;
 
 // Soil sensor Threshold
-const int SoilThreshold = 50;
+int SoilThreshold;
 bool relayOverride = false;
 
 // JSON Document
@@ -43,7 +43,7 @@ void setup() {
   Serial.begin(115200);
 
   pinMode(relay1Pin, OUTPUT);
-  digitalWrite(relay1Pin, HIGH); // Initialize relay to OFF
+  digitalWrite(relay1Pin, HIGH);  // Initialize relay to OFF
   // delay(2000);
 
   dht.begin();
@@ -65,6 +65,11 @@ void setup() {
     Serial.println("LittleFS Mounted Successfully");
   }
 
+  if (!loadConfig()) {
+    SoilThreshold = 50;
+    saveConfig();
+  }
+
   WiFi.softAP(ssid, password);
   IPAddress IP = WiFi.softAPIP();
   Serial.print("AP IP address: ");
@@ -76,7 +81,7 @@ void setup() {
     Serial.println("MDNS responder started");
   }
 
-  configTime(0, 0, "pool.ntp.org"); // NTP time
+  configTime(0, 0, "pool.ntp.org");  // NTP time
 
   server.on("/chart.js", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (LittleFS.exists("/chart.js")) {
@@ -134,6 +139,17 @@ void setup() {
     request->send(200, "text/plain", fileContent);
   });
 
+  server.on("/setThreshold", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if (request->hasParam("threshold")) {
+      String thresholdStr = request->getParam("threshold")->value();
+      SoilThreshold = thresholdStr.toInt();
+      saveConfig();
+      request->send(200, "text/plain", "Threshold updated");
+    } else {
+      request->send(400, "text/plain", "Missing threshold parameter");
+    }
+  });
+
   server.on("/relay1/on", HTTP_GET, [](AsyncWebServerRequest *request) {
     digitalWrite(relay1Pin, LOW);
     relayOverride = true;
@@ -146,6 +162,22 @@ void setup() {
     request->send(200, "text/plain", "Relay 1 OFF");
   });
 
+  server.on("/getSoilThreshold", HTTP_GET, [](AsyncWebServerRequest *request) {
+    DynamicJsonDocument doc(32);
+    doc["soilThreshold"] = SoilThreshold;
+    String jsonString;
+    serializeJson(doc, jsonString);
+    request->send(200, "application/json", jsonString);
+  });
+
+  server.on("/getRelay1State", HTTP_GET, [](AsyncWebServerRequest *request) {
+    DynamicJsonDocument doc(32);
+    doc["relayState"] = (digitalRead(relay1Pin) == LOW) ? true : false;
+    String jsonString;
+    serializeJson(doc, jsonString);
+    request->send(200, "application/json", jsonString);
+  });
+
   server.begin();
   WiFi.softAPConfig(IP, IP, IPAddress(255, 255, 255, 0));
 
@@ -153,7 +185,6 @@ void setup() {
   Serial.println(LittleFS.totalBytes());
   Serial.print("LittleFS used bytes: ");
   Serial.println(LittleFS.usedBytes());
-
 }
 
 void loop() {
@@ -177,6 +208,44 @@ void loop() {
   }
 
   delay(2000);
+}
+
+bool loadConfig() {
+  File configFile = LittleFS.open("/config.json", "r");
+  if (!configFile) {
+    Serial.println("Failed to open config file, using default values");
+    Serial.println(configFile);
+    return false;
+  }
+
+  DynamicJsonDocument doc(128);
+  DeserializationError error = deserializeJson(doc, configFile);
+  if (error) {
+    Serial.println("Failed to parse config file, using default values");
+    configFile.close();
+    return false;
+  }
+
+  SoilThreshold = doc["soilThreshold"];
+  configFile.close();
+  Serial.print("Soil threshold loaded: ");
+  Serial.println(SoilThreshold);
+  return true;
+}
+
+void saveConfig() {
+  DynamicJsonDocument doc(128);
+  doc["soilThreshold"] = SoilThreshold;
+
+  File configFile = LittleFS.open("/config.json", "w");
+  if (!configFile) {
+    Serial.println("Failed to open config file for writing");
+    return;
+  }
+
+  serializeJson(doc, configFile);
+  configFile.close();
+  Serial.println("Config file saved");
 }
 
 void logSensorData(int soil, float temp, float hum) {

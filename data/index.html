@@ -1,10 +1,15 @@
 <!DOCTYPE html>
 <html>
-<head>
+  <head>
     <title>Sensor Data</title>
-</head>
-<body>
+  </head>
+  <body>
     <h1>Sensor Data</h1>
+    <center>
+      <label for="thresholdInput">Soil Threshold:</label>
+      <input type="number" id="thresholdInput" />
+      <button onclick="setThreshold()">Set Threshold</button>
+    </center>
     <canvas id="soilChart" width="400" height="200"></canvas>
     <canvas id="tempChart" width="400" height="200"></canvas>
     <canvas id="humidityChart" width="400" height="200"></canvas>
@@ -18,84 +23,119 @@
 
     <script src="/chart.js"></script>
     <script defer>
-        var soilChart, tempChart, humidityChart;
+      var soilChart, tempChart, humidityChart;
 
-        function initCharts() {
-            soilChart = new Chart(document.getElementById("soilChart").getContext("2d"), {
-                type: "line",
-                data: {
-                    labels: [],
-                    datasets: [{ label: "Soil", data: [], borderColor: "brown", fill: false }]
-                }
+      function initCharts() {
+        soilChart = new Chart(
+          document.getElementById("soilChart").getContext("2d"),
+          {
+            type: "line",
+            data: {
+              labels: [],
+              datasets: [
+                { label: "Soil", data: [], borderColor: "brown", fill: false },
+              ],
+            },
+          }
+        );
+        tempChart = new Chart(
+          document.getElementById("tempChart").getContext("2d"),
+          {
+            type: "line",
+            data: {
+              labels: [],
+              datasets: [
+                {
+                  label: "Temperature",
+                  data: [],
+                  borderColor: "red",
+                  fill: false,
+                },
+              ],
+            },
+          }
+        );
+        humidityChart = new Chart(
+          document.getElementById("humidityChart").getContext("2d"),
+          {
+            type: "line",
+            data: {
+              labels: [],
+              datasets: [
+                {
+                  label: "Humidity",
+                  data: [],
+                  borderColor: "blue",
+                  fill: false,
+                },
+              ],
+            },
+          }
+        );
+      }
+
+      function loadHistory() {
+        return fetch("/history")
+          .then((response) => response.text())
+          .then((text) => {
+            const lines = text.trim().split("\n");
+            lines.forEach((line) => {
+              try {
+                const entry = JSON.parse(line);
+                updateChart(soilChart, entry.timestamp, entry.soil);
+                updateChart(tempChart, entry.timestamp, entry.temperature);
+                updateChart(humidityChart, entry.timestamp, entry.humidity);
+              } catch (e) {
+                console.error("Error parsing JSON line:", line, e);
+              }
             });
-            tempChart = new Chart(document.getElementById("tempChart").getContext("2d"), {
-                type: "line",
-                data: {
-                    labels: [],
-                    datasets: [{ label: "Temperature", data: [], borderColor: "red", fill: false }]
-                }
-            });
-            humidityChart = new Chart(document.getElementById("humidityChart").getContext("2d"), {
-                type: "line",
-                data: {
-                    labels: [],
-                    datasets: [{ label: "Humidity", data: [], borderColor: "blue", fill: false }]
-                }
-            });
+          });
+      }
+
+      function updateData() {
+        fetch("/data")
+          .then((response) => response.json())
+          .then((data) => {
+            document.getElementById("soilValue").textContent = data.soil;
+            document.getElementById("temperature").textContent =
+              data.temperature;
+            document.getElementById("humidity").textContent = data.humidity;
+
+            let now = new Date().toLocaleTimeString();
+            updateChart(soilChart, now, data.soil);
+            updateChart(tempChart, now, data.temperature);
+            updateChart(humidityChart, now, data.humidity);
+          });
+      }
+
+      function updateChart(chart, label, data) {
+        chart.data.labels.push(label);
+        chart.data.datasets[0].data.push(data);
+        if (chart.data.labels.length > 20) {
+          chart.data.labels.shift();
+          chart.data.datasets[0].data.shift();
         }
+        chart.update();
+      }
 
-        function loadHistory() {
-            return fetch("/history")
-                .then(response => response.text())
-                .then(text => {
-                    const lines = text.trim().split('\n');
-                    lines.forEach(line => {
-                        try {
-                            const entry = JSON.parse(line);
-                            updateChart(soilChart, entry.timestamp, entry.soil);
-                            updateChart(tempChart, entry.timestamp, entry.temperature);
-                            updateChart(humidityChart, entry.timestamp, entry.humidity);
-                        } catch (e) {
-                            console.error("Error parsing JSON line:", line, e);
-                        }
-                    });
-                });
-        }
+      function relay1On() {
+        fetch("/relay1/on");
+      }
+      function relay1Off() {
+        fetch("/relay1/off");
+      }
 
-        function updateData() {
-            fetch("/data")
-                .then(response => response.json())
-                .then(data => {
-                    document.getElementById("soilValue").textContent = data.soil;
-                    document.getElementById("temperature").textContent = data.temperature;
-                    document.getElementById("humidity").textContent = data.humidity;
+      function setThreshold() {
+        const threshold = document.getElementById("thresholdInput").value;
+        fetch(`/setThreshold?threshold=${threshold}`);
+      }
 
-                    let now = new Date().toLocaleTimeString();
-                    updateChart(soilChart, now, data.soil);
-                    updateChart(tempChart, now, data.temperature);
-                    updateChart(humidityChart, now, data.humidity);
-                });
-        }
-
-        function updateChart(chart, label, data) {
-            chart.data.labels.push(label);
-            chart.data.datasets[0].data.push(data);
-            if (chart.data.labels.length > 20) {
-                chart.data.labels.shift();
-                chart.data.datasets[0].data.shift();
-            }
-            chart.update();
-        }
-
-        function relay1On() { fetch("/relay1/on"); }
-        function relay1Off() { fetch("/relay1/off"); }
-
-        window.onload = function () {
-            initCharts();
-            loadHistory().then(() => {
-                setInterval(updateData, 2000);
-            });
-        };
+      window.onload = function () {
+        initCharts();
+        loadHistory().then(() => {
+          setInterval(updateData, 2000);
+        });
+      };
     </script>
-</body>
+  </body>
 </html>
